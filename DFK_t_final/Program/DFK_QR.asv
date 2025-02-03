@@ -64,8 +64,12 @@ R_sqrt_inv      = diag(1 ./ R_sqrt_diag);
 dimX            = 18;  %  x = (dlt V, dlt F, nu, beta, dg, p)
 Y_last          = zeros(dimX, 1);
 %----------------- Declare arrays for results ---------------------- 
-Y_forw          = zeros(TimeEnd, dimX);
-P_forw          = cell(1, TimeEnd);
+Y_forw          = zeros(TimeEnd+1, dimX);
+P_forw          = cell(1, TimeEnd+1);
+Tmp_matr1       = cell(1,TimeEnd);               % Auxiliary matrix
+Tmp_matr2       = cell(1,TimeEnd);               % Auxiliary matrix
+Resid_forw      = zeros(TimeEnd,size(R_sqrt,1)); % Array of residuals
+
 P_forw{1}       = P_last;
 
 % ------------------KF algorithm-------------------------------------------
@@ -106,72 +110,118 @@ for i = 1:TimeEnd
     % Copy into arrays
     Y_forw(i+1,:) = Y_pred';% 1 x Nx
     P_forw{i+1}   = P_pred;
+    X_sm = zeros(TimeEnd+1, dimX);
+
+    % Copy in arrays
+    Tmp_matr1{i}  = Tmp1;    
+    Tmp_matr2{i}  = Tmp2;    
+    if size(R_sqrt,1)>1               
+        Resid_forw(i,:) = Resid';                     
+    else        
+        Resid_forw(i) = Resid;       
+    end       
 
 end
-%----------Estimates from Forward KF ------------------------------------
-X_j=zeros(dimX, TimeEnd);
 
-for j = 1 : TimeEnd       
-    Y_current = Y_forw(j, :)';    
+%-----------Initialize arrays for Smoothing ---------------------
+Y_sm_prev  =  zeros( dimX,1 ); % Initial smoothing estimate of state vector
+I_sm_prev  =  eye( dimX );     % Initial smoothing estimate information matrix
+Y_prev     =  zeros( dimX,1);  % Initial filtering estimate of state vector
+Resid_est   = zeros(TimeEnd,1); % Initial residual vector  
+
+
+ %--------- Smoothing --------------------------------
+ for i = 1 : TimeEnd    
+      
+    j = TimeEnd - i + 1; % Backward iterations
+     
+    % Results of Forward KF
+    Y_current = Y_forw(j, :)'; 
     P_current = P_forw{j};    
     
-    P_j       = P_current * P_current';  % Covariance matrix    
-    X_j(:, j) = P_current * Y_current;   % State vector estimate  
-end
-% ---------------------END of DFK--------------------------
+    % Results of Forward KF
+    Tmp1  =  Tmp_matr1{j};
+    Tmp2  =  Tmp_matr2{j};
+    if size(R_sqrt,1)>1    
+        Resid  =  Resid_forw(j,:)';            
+    else
+        Resid  =  Resid_forw(j);            
+    end    
+    
+    % Smoothed estimates of state vector & information matrix
+    [Y_sm,I_sm] = KF_smooth_back(Y_current,Y_prev,Y_sm_prev,I_sm_prev,Tmp1,Tmp2,Resid);
+    
+    % Reinitialization
+    Y_sm_prev  =  Y_sm; 
+    I_sm_prev  =  I_sm;                    
+    Y_prev     =  Y_forw(j,:)';   
+    
+
+    %-------- Smoothed estimates of State vector X & Covariance matrix at t_j -------    
+    X_j  = P_current * Y_sm;                % should be copied in an array           
+    P_j  = P_current * I_sm * P_current';   % should be copied in an array
+    
+    X_sm(j, :) = X_j';
+    %----------- Residual vector estimate ------------------    
+    % Resid_est(j)  =  dVx_array(j, :)' - H_t * X_j;
+
+    
+ end
 
 % ---------------------record into the file--------------------------------
 
-X_j = X_j';
+time_end = 5250;
 
 % dv
 figure(1)
 hold
 title('dV')
-plot(X_j(:, 1:3))
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 1:3))
 % 
 % beta
 figure(2)
 hold
 title('beta')
-plot(X_j(:, 4:6))
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 4:6))
 % 
 % 
 % df
 figure(3)
 hold
 title('Delta f')
-plot(X_j(:, 7:9))
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 7:9))
 
 
 % nu
 figure(4)
 hold
-plot(X_j(:, 10:12))
+title('nu')
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 10:12))
 
+time_end = 5250;
+% windowSize = 80*10; 
+% sft = windowSize/2;
+% b = (1/windowSize)*ones(1,windowSize);
+% a = 1;
+% dg_sm = filter(b, a, X_j(:, 13:15));
 
-windowSize = 100*10; 
-b = (1/windowSize)*ones(1,windowSize);
-a = 1;
-dg_sm = filter(b, a, X_j(:, 13:15));
-
-% dg
+% dg3
 figure(5)
 hold
-plot(time(1:52500), dg_sm(:, 3))
-plot(true_anomaly(1:10:525000,4));
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 15))
+plot(true_anomaly(1*10:10:time_end*100,1),10^5*true_anomaly(1:10:time_end*100,4));
 legend('comp', 'true')
 
 figure(6)
 hold
-plot(dg_sm(:, 1))
-plot(true_anomaly(1:10:525000,2));
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 13))
+plot(true_anomaly(1+sft*10:10:time_end*100+sft*10,1), 10^5*true_anomaly(1:10:time_end*100,2));
 legend('comp', 'true')
 
-figure(7)
-hold
-plot(dg_sm(:, 1))
-plot(true_anomaly(1:10:525000,3));
-legend('comp', 'true')
+% figure(7)
+% hold
+plot(time(1:time_end*10), 10^5*X_sm(1:end-1, 14))
+% plot(true_anomaly(1+sft*10:10:time_end*100+sft*10,1), 10^5*true_anomaly(1:10:time_end*100,3));
+% legend('comp', 'true')
 
 disp(['время работы программы: ', num2str(etime(clock, timetime)), ' секунд'])
